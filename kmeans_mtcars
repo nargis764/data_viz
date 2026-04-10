@@ -1,0 +1,273 @@
+# ============================================================
+# K-Means Clustering Analysis of the mtcars Dataset
+# Research Question:
+#   "How do cars in the mtcars dataset naturally group together,
+#    and how do those groupings relate to fuel efficiency,
+#    engine characteristics, and performance attributes?"
+#
+# Packages: tidyverse, broom, patchwork
+# ============================================================
+
+library(tidyverse)
+library(broom)
+library(patchwork)
+
+
+# ── 1. Prepare the data ──────────────────────────────────────
+
+# Scale the numeric variables used for clustering
+# Variables chosen: mpg, hp, wt, disp, qsec — capture efficiency & performance
+mtcars_scaled <- mtcars %>%
+  rownames_to_column("car") %>%
+  select(car, mpg, hp, wt, disp, qsec, cyl, am) %>%
+  mutate(across(c(mpg, hp, wt, disp, qsec), scale))
+
+
+# ── 2. Choose k with the Elbow Method ────────────────────────
+
+set.seed(42)
+
+# Fit k-means for k = 1..8 and extract total within-cluster SS
+elbow_data <- tibble(k = 1:8) %>%
+  mutate(
+    km   = map(k, ~ kmeans(mtcars_scaled %>% select(mpg, hp, wt, disp, qsec),
+                           centers = .x, nstart = 25)),
+    glance = map(km, glance)
+  ) %>%
+  unnest(glance)
+
+
+# ── 3. Fit the final k-means model (k = 3) ───────────────────
+
+km_fit <- kmeans(
+  mtcars_scaled %>% select(mpg, hp, wt, disp, qsec),
+  centers = 3,
+  nstart  = 25
+)
+
+# Attach cluster labels back to the original (unscaled) data
+mtcars_clustered <- mtcars %>%
+  rownames_to_column("car") %>%
+  mutate(
+    cluster = factor(km_fit$cluster,
+                     labels = c("Cluster 1\nEconomical",
+                                "Cluster 2\nBalanced",
+                                "Cluster 3\nHigh-Power"))
+  )
+
+# Use broom::tidy() to get cluster centroids
+centroids <- tidy(km_fit)
+
+
+# ── 4. VISUALIZATION 1 — Multi-panel dashboard (patchwork) ───
+#   Panel A: Elbow plot
+#   Panel B: Scatter — mpg vs hp (coloured by cluster)
+#   Panel C: Scatter — wt  vs disp (coloured by cluster)
+#   Panel D: Box plots of mpg by cluster
+
+cluster_palette <- c(
+  "Cluster 1\nEconomical" = "#2196F3",
+  "Cluster 2\nBalanced"   = "#4CAF50",
+  "Cluster 3\nHigh-Power" = "#F44336"
+)
+
+# Panel A – Elbow plot
+p_elbow <- ggplot(elbow_data, aes(x = k, y = tot.withinss)) +
+  geom_line(colour = "grey50", linewidth = 0.8) +
+  geom_point(size = 3, colour = "#3F51B5") +
+  geom_vline(xintercept = 3, linetype = "dashed",
+             colour = "#F44336", linewidth = 0.7) +
+  annotate("text", x = 3.15, y = max(elbow_data$tot.withinss) * 0.9,
+           label = "k = 3\nchosen", hjust = 0, size = 3,
+           colour = "#F44336") +
+  labs(
+    title    = "A  Elbow Method",
+    subtitle = "Total within-cluster SS vs. number of clusters",
+    x        = "Number of clusters (k)",
+    y        = "Total Within-Cluster SS"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 12),
+    plot.subtitle = element_text(size = 9, colour = "grey40")
+  )
+
+# Panel B – MPG vs HP
+p_mpg_hp <- ggplot(mtcars_clustered, aes(x = hp, y = mpg, colour = cluster)) +
+  geom_point(size = 3, alpha = 0.85) +
+  geom_text(aes(label = car), size = 2.2, vjust = -0.7,
+            show.legend = FALSE, check_overlap = TRUE) +
+  scale_colour_manual(values = cluster_palette) +
+  labs(
+    title    = "B  MPG vs Horsepower",
+    subtitle = "Each point = one car model",
+    x        = "Horsepower (hp)",
+    y        = "Fuel Efficiency (mpg)",
+    colour   = "Cluster"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 12),
+    plot.subtitle = element_text(size = 9, colour = "grey40"),
+    legend.position = "none"
+  )
+
+# Panel C – Weight vs Displacement
+p_wt_disp <- ggplot(mtcars_clustered, aes(x = disp, y = wt, colour = cluster)) +
+  geom_point(size = 3, alpha = 0.85) +
+  geom_text(aes(label = car), size = 2.2, vjust = -0.7,
+            show.legend = FALSE, check_overlap = TRUE) +
+  scale_colour_manual(values = cluster_palette) +
+  labs(
+    title    = "C  Weight vs Displacement",
+    subtitle = "Engine size and vehicle weight",
+    x        = "Displacement (cu.in.)",
+    y        = "Weight (1000 lbs)",
+    colour   = "Cluster"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 12),
+    plot.subtitle = element_text(size = 9, colour = "grey40"),
+    legend.position = "none"
+  )
+
+# Panel D – MPG distribution by cluster (box plot)
+p_box <- ggplot(mtcars_clustered, aes(x = cluster, y = mpg,
+                                      fill = cluster, colour = cluster)) +
+  geom_boxplot(alpha = 0.4, outlier.shape = NA) +
+  geom_jitter(width = 0.15, size = 2, alpha = 0.8) +
+  scale_fill_manual(values   = cluster_palette) +
+  scale_colour_manual(values = cluster_palette) +
+  labs(
+    title    = "D  MPG by Cluster",
+    subtitle = "Distribution of fuel efficiency",
+    x        = NULL,
+    y        = "Miles per Gallon (mpg)"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 12),
+    plot.subtitle = element_text(size = 9, colour = "grey40"),
+    legend.position = "none",
+    axis.text.x    = element_text(size = 8)
+  )
+
+# Compose with patchwork: top row (elbow | scatter), bottom row (scatter | box)
+viz1 <- (p_elbow | p_mpg_hp) / (p_wt_disp | p_box) +
+  plot_annotation(
+    title   = "K-Means Clustering of mtcars (k = 3)",
+    subtitle = paste(
+      "Research Question: How do cars naturally group together, and how do those",
+      "groupings relate to fuel efficiency, engine characteristics, and performance?"
+    ),
+    caption = "Data: mtcars (R built-in) | Packages: tidyverse, broom, patchwork",
+    theme   = theme(
+      plot.title    = element_text(face = "bold", size = 15, hjust = 0),
+      plot.subtitle = element_text(size = 10, colour = "grey30", hjust = 0),
+      plot.caption  = element_text(size = 8,  colour = "grey50", hjust = 1)
+    )
+  )
+
+ggsave("viz1_multipanel.png", viz1,
+       width = 13, height = 9, dpi = 180, bg = "white")
+message("Saved → viz1_multipanel.png")
+viz1
+
+# ── 5. VISUALIZATION 2 — Faceted parallel coordinates ────────
+#   Each facet = one cluster; lines show how cars score across
+#   5 standardised variables (mpg, hp, wt, disp, qsec)
+
+# Rebuild long-format from the *scaled* data with cluster labels
+mtcars_long <- mtcars_scaled %>%
+  mutate(cluster = factor(km_fit$cluster,
+                          labels = c("Cluster 1 — Economical",
+                                     "Cluster 2 — Balanced",
+                                     "Cluster 3 — High-Power"))) %>%
+  pivot_longer(
+    cols      = c(mpg, hp, wt, disp, qsec),
+    names_to  = "variable",
+    values_to = "z_score"
+  ) %>%
+  mutate(
+    variable = factor(variable,
+                      levels = c("mpg", "hp", "wt", "disp", "qsec"),
+                      labels = c("MPG", "HP", "Weight", "Displ.", "¼-mile"))
+  )
+
+# Cluster mean profile (one line per cluster, thicker)
+cluster_means <- mtcars_long %>%
+  group_by(cluster, variable) %>%
+  summarise(z_score = mean(z_score), .groups = "drop")
+
+facet_palette <- c(
+  "Cluster 1 — Economical" = "#2196F3",
+  "Cluster 2 — Balanced"   = "#4CAF50",
+  "Cluster 3 — High-Power" = "#F44336"
+)
+
+viz2 <- ggplot(mtcars_long,
+               aes(x = variable, y = z_score, group = car, colour = cluster)) +
+  # Individual car lines (thin, semi-transparent)
+  geom_line(alpha = 0.35, linewidth = 0.6) +
+  geom_point(alpha = 0.45, size = 1.4) +
+  # Cluster mean profile (bold overlay)
+  geom_line(data     = cluster_means,
+            aes(group = cluster),
+            linewidth = 1.6, alpha = 0.9) +
+  geom_point(data  = cluster_means,
+             size  = 3.5, alpha = 1, shape = 21,
+             fill  = "white", stroke = 1.5) +
+  # Reference line at z = 0
+  geom_hline(yintercept = 0, linetype = "dashed",
+             colour = "grey60", linewidth = 0.5) +
+  # Facet by cluster
+  facet_wrap(~ cluster, ncol = 3) +
+  scale_colour_manual(values = facet_palette) +
+  labs(
+    title    = "Parallel Coordinates Profile by Cluster",
+    subtitle = paste(
+      "Each thin line = one car; bold line = cluster mean profile.",
+      "Variables are z-score standardised."
+    ),
+    x        = "Variable",
+    y        = "Standardised Value (z-score)",
+    colour   = "Cluster",
+    caption  = "Data: mtcars (R built-in) | Packages: tidyverse, broom, patchwork"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title      = element_text(face = "bold", size = 14, hjust = 0),
+    plot.subtitle   = element_text(size = 10, colour = "grey30", hjust = 0),
+    plot.caption    = element_text(size = 8,  colour = "grey50", hjust = 1),
+    strip.text      = element_text(face = "bold", size = 11),
+    strip.background = element_rect(fill = "grey95", colour = NA),
+    panel.grid.minor = element_blank(),
+    legend.position  = "none",
+    axis.text.x      = element_text(size = 10)
+  )
+
+ggsave("viz2_faceted.png", viz2,
+       width = 13, height = 5, dpi = 180, bg = "white")
+message("Saved → viz2_faceted.png")
+
+
+# ── 6. Quick cluster summary table ───────────────────────────
+
+summary_tbl <- mtcars %>%
+  rownames_to_column("car") %>%
+  mutate(cluster = factor(km_fit$cluster,
+                          labels = c("Economical", "Balanced", "High-Power"))) %>%
+  group_by(cluster) %>%
+  summarise(
+    n         = n(),
+    avg_mpg   = round(mean(mpg), 1),
+    avg_hp    = round(mean(hp),  1),
+    avg_wt    = round(mean(wt),  2),
+    avg_disp  = round(mean(disp), 1),
+    .groups   = "drop"
+  )
+
+cat("\n── Cluster Summary ──────────────────────────────────\n")
+print(summary_tbl)
+cat("\n")
