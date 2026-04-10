@@ -1,0 +1,165 @@
+library(tidyverse)
+library(broom)
+library(patchwork)
+
+# ── 1. Load & prepare 
+data(midwest, package = "ggplot2")
+
+# Select numeric socioeconomic variables and scale
+mw_scaled <- midwest |>
+  select(county, state,
+         poptotal, popdensity, percwhite, percblack, percasian,
+         percother, perchsd, percollege, percprof,
+         percpovertyknown, percbelowpoverty, percchildbelowpovert,
+         percadultpoverty, percelderlypoverty, inmetro) |>
+  mutate(across(where(is.numeric), scale))
+
+mw_matrix <- mw_scaled |> select(where(is.numeric)) |> as.matrix()
+
+# ── 2. PCA 
+pca_result <- prcomp(mw_matrix, center = FALSE, scale. = FALSE)
+pca_scores <- as_tibble(pca_result$x[, 1:5])  # keep top 5 PCs
+
+# Bind back metadata
+mw_pca <- bind_cols(
+  midwest |> select(county, state),
+  pca_scores
+)
+
+# ── 3. Elbow method via broom 
+set.seed(42)
+kclusts <- tibble(k = 1:9) |>
+  mutate(
+    kclust  = map(k, ~ kmeans(pca_scores, centers = .x, nstart = 25)),
+    glanced = map(kclust, glance)
+  )
+
+elbow_data <- kclusts |> unnest(glanced)
+
+# ── 4. Fit final k-means (k = 4)
+final_km <- kmeans(pca_scores, centers = 4, nstart = 25)
+
+mw_clustered <- mw_pca |>
+  mutate(cluster = factor(final_km$cluster))
+
+# Tidy cluster centers
+centers_tidy <- tidy(final_km) |>
+  pivot_longer(cols = starts_with("PC"), names_to = "PC", values_to = "loading")
+
+# ── 5. VISUALIZATION 1: Multi-panel with patchwork 
+
+# Panel A: Elbow plot
+p_elbow <- ggplot(elbow_data, aes(x = k, y = tot.withinss)) +
+  geom_line(color = "#5B4CB8", linewidth = 1) +
+  geom_point(size = 3, color = "#5B4CB8", fill = "white", shape = 21, stroke = 1.5) +
+  geom_vline(xintercept = 4, linetype = "dashed", color = "gray50", linewidth = 0.6) +
+  scale_x_continuous(breaks = 1:9) +
+  labs(title = "A  Elbow plot", x = "Number of clusters (k)", y = "Total within-cluster SS") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(face = "bold"))
+
+# Panel B: PCA scatter colored by cluster
+p_scatter <- ggplot(mw_clustered, aes(x = PC1, y = PC2, color = cluster)) +
+  geom_point(alpha = 0.65, size = 1.8) +
+  stat_ellipse(level = 0.75, linewidth = 0.6, linetype = "dashed") +
+  scale_color_brewer(palette = "Set2") +
+  labs(title = "B  County clusters in PC space",
+       x = "PC1", y = "PC2", color = "Cluster") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(face = "bold"),
+        legend.position = "bottom")
+
+# Panel C: PC loadings heatmap (cluster centers)
+p_loadings <- centers_tidy |>
+  filter(PC %in% c("PC1", "PC2", "PC3")) |>
+  ggplot(aes(x = PC, y = factor(cluster), fill = loading)) +
+  geom_tile(color = "white", linewidth = 0.4) +
+  scale_fill_gradient2(low = "#3B8BD4", mid = "white", high = "#E8593C", midpoint = 0) +
+  labs(title = "C  Cluster centers (PCA space)",
+       x = NULL, y = "Cluster", fill = "Score") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(face = "bold"),
+        legend.key.width = unit(0.4, "cm"))
+
+# Panel D: Cluster size bar chart
+p_sizes <- mw_clustered |>
+  count(cluster) |>
+  ggplot(aes(x = cluster, y = n, fill = cluster)) +
+  geom_col(width = 0.6, show.legend = FALSE) +
+  geom_text(aes(label = n), vjust = -0.4, size = 3.5) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(title = "D  Counties per cluster", x = "Cluster", y = "Count") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(face = "bold"))
+
+# Combine with patchwork
+viz1 <- (p_elbow | p_scatter) / (p_loadings | p_sizes) +
+  plot_annotation(
+    title    = "K-Means Clustering of Midwest Counties",
+    subtitle = "PCA reduced 16 demographic variables to 5 components before clustering (k = 4)",
+    theme    = theme(
+      plot.title    = element_text(size = 14, face = "bold"),
+      plot.subtitle = element_text(size = 10, color = "gray40")
+    )
+  )
+
+print(viz1)
+
+# ── 6. VISUALIZATION 2: Faceted boxplots 
+# Join cluster back to original (unscaled) data
+# Join cluster back to original (unscaled) data
+mw_orig <- midwest |>
+  select(county, state, percollege, percbelowpoverty,
+         popdensity, percwhite, percblack, perchsd) |>
+  mutate(cluster = factor(final_km$cluster))
+
+# Rename for cleaner facet labels
+label_map <- c(
+  percollege       = "College educated (%)",
+  percbelowpoverty = "Below poverty (%)",
+  popdensity       = "Population density",
+  percwhite        = "White (%)",
+  percblack        = "Black (%)",
+  perchsd          = "High school diploma (%)"
+)
+
+mw_long <- mw_orig |>
+  pivot_longer(
+    cols      = c(percollege, percbelowpoverty, popdensity,
+                  percwhite, percblack, perchsd),
+    names_to  = "variable",
+    values_to = "value"
+  ) |>
+  mutate(
+    variable = recode(variable, !!!label_map),
+    variable = factor(variable, levels = label_map)
+  )
+
+# Viz 2: Faceted boxplots colored by cluster
+viz2 <- ggplot(mw_long, aes(x = cluster, y = value, fill = cluster)) +
+  geom_boxplot(
+    outlier.size  = 0.7,
+    outlier.alpha = 0.4,
+    linewidth     = 0.4,
+    show.legend   = FALSE
+  ) +
+  scale_fill_brewer(palette = "Set2") +
+  facet_wrap(~ variable, scales = "free_y", ncol = 3) +
+  labs(
+    title    = "Demographic Profile of County Clusters",
+    subtitle = "Each facet shows a key variable across the four clusters (k = 4)",
+    x        = "Cluster",
+    y        = NULL,
+    caption  = "Data: midwest (ggplot2) · Clusters derived from k-means on PCA scores"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title      = element_text(face = "bold", size = 13),
+    plot.subtitle   = element_text(color = "gray40", size = 10),
+    plot.caption    = element_text(color = "gray60", size = 8),
+    strip.text      = element_text(face = "bold", size = 9),
+    axis.text       = element_text(size = 9),
+    panel.grid.minor = element_blank()
+  )
+
+print(viz2)
