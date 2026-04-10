@@ -1,0 +1,172 @@
+# Load required packages
+library(tidyverse)
+library(broom)
+library(patchwork)
+
+# Load dataset
+data(iris)
+
+# -------------------------------
+# Step 1: Prepare data and find optimal k (scree plot)
+# -------------------------------
+
+iris_numeric <- iris %>%
+  select(Sepal.Length, Sepal.Width, Petal.Length, Petal.Width)
+
+iris_scaled <- scale(iris_numeric)
+
+# Calculate total within-cluster sum of squares for k = 1 to 10
+wss <- sapply(1:10, function(k) {
+  kmeans(iris_scaled, centers = k, nstart = 25, iter.max = 50)$tot.withinss
+})
+
+# Create scree plot data
+scree_data <- data.frame(k = 1:10, wss = wss)
+
+# Scree plot (elbow method)
+scree_plot <- ggplot(scree_data, aes(x = k, y = wss)) +
+  geom_line(color = "steelblue", size = 1.2) +
+  geom_point(color = "steelblue", size = 3) +
+  geom_vline(xintercept = 3, linetype = "dashed", color = "red", alpha = 0.7) +
+  annotate("text", x = 3.2, y = max(wss) * 0.9, 
+           label = "Elbow at k = 3", color = "red", hjust = 0, size = 3.5) +
+  theme_minimal() +
+  labs(title = "Scree Plot (Elbow Method)",
+       subtitle = "Total within-cluster sum of squares",
+       x = "Number of clusters (k)", 
+       y = "Total Within-Cluster SS") +
+  scale_x_continuous(breaks = 1:10)
+
+# -------------------------------
+# Step 2: Perform k-means with k=3
+# -------------------------------
+
+set.seed(123)
+kmeans_result <- kmeans(iris_scaled, centers = 3, nstart = 25)
+
+# Add cluster assignments
+iris_clustered <- augment(kmeans_result, iris_scaled) %>%
+  bind_cols(iris %>% select(Species)) %>%
+  rename(cluster = .cluster) %>%
+  mutate(cluster = as.factor(cluster),
+         Species = as.factor(Species))
+
+# -------------------------------
+# Step 3: Visualization 1 - Multiple panels using patchwork (including scree plot)
+# -------------------------------
+
+# Panel A: Sepal dimensions by cluster
+p_sepal <- ggplot(iris_clustered, aes(x = Sepal.Length, y = Sepal.Width, color = cluster)) +
+  geom_point(alpha = 0.7, size = 2) +
+  theme_minimal() +
+  labs(title = "Sepal Dimensions", 
+       x = "Sepal Length", 
+       y = "Sepal Width",
+       color = "k-means Cluster")
+
+# Panel B: Petal dimensions by cluster
+p_petal <- ggplot(iris_clustered, aes(x = Petal.Length, y = Petal.Width, color = cluster)) +
+  geom_point(alpha = 0.7, size = 2) +
+  theme_minimal() +
+  labs(title = "Petal Dimensions", 
+       x = "Petal Length", 
+       y = "Petal Width",
+       color = "k-means Cluster")
+
+# Panel C: Cluster sizes
+p_cluster_size <- ggplot(iris_clustered, aes(x = cluster, fill = cluster)) +
+  geom_bar() +
+  theme_minimal() +
+  labs(title = "Cluster Distribution", 
+       x = "k-means Cluster", 
+       y = "Count") +
+  theme(legend.position = "none")
+
+# Panel D: Cluster centroids visualization
+centroids <- as.data.frame(kmeans_result$centers)
+centroids$cluster <- as.factor(1:3)
+centroids_long <- centroids %>%
+  pivot_longer(cols = -cluster, names_to = "Variable", values_to = "Value")
+
+p_centroids <- ggplot(centroids_long, aes(x = Variable, y = Value, fill = cluster)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  labs(title = "Cluster Centroids (Scaled)", 
+       x = "Measurement", 
+       y = "Standardized Value",
+       fill = "Cluster") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Combine all panels with scree plot
+# Layout: Scree plot on top row, then two rows of two plots each
+compound_plot <- (scree_plot) /
+  (p_sepal | p_petal) /
+  (p_cluster_size | p_centroids) +
+  plot_annotation(
+    title = "Multiple Panels: k-means Analysis of Iris Dataset",
+    subtitle = "Scree plot + cluster visualizations combined using patchwork",
+    theme = theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+                  plot.subtitle = element_text(hjust = 0.5, size = 10))
+  )
+
+print(compound_plot)
+
+# -------------------------------
+# Step 4: Visualization 2 - Faceting by Species (different from clustering)
+# -------------------------------
+
+faceted_plot <- ggplot(iris_clustered, aes(x = Sepal.Length, y = Petal.Length, 
+                                           color = cluster, shape = cluster)) +
+  geom_point(alpha = 0.7, size = 2.5) +
+  facet_wrap(~ Species, ncol = 3, scales = "free") +
+  theme_minimal() +
+  labs(
+    title = "Facets by True Species: How do k-means clusters align with species?",
+    subtitle = "Each panel represents a different iris species",
+    x = "Sepal Length",
+    y = "Petal Length",
+    color = "k-means Cluster",
+    shape = "k-means Cluster"
+  ) +
+  theme(
+    strip.background = element_rect(fill = "lightgray", color = NA),
+    strip.text = element_text(size = 11, face = "bold"),
+    legend.position = "bottom"
+  ) +
+  # Add interpretation annotations
+  annotate("text", x = 5, y = 6.5, 
+           label = "Setosa: All in one cluster", 
+           size = 3, color = "gray30", fontface = "italic") +
+  annotate("text", x = 6, y = 5.5, 
+           label = "Versicolor & Virginica: Mixed clusters", 
+           size = 3, color = "gray30", fontface = "italic")
+
+print(faceted_plot)
+
+# -------------------------------
+# Optional: Cross-tabulation to understand the faceted plot better
+# -------------------------------
+
+cross_tab <- table(iris_clustered$Species, iris_clustered$cluster)
+print("Cross-tabulation of True Species vs k-means Clusters:")
+print(cross_tab)
+
+# Cluster purity calculation
+purity <- sum(apply(cross_tab, 1, max)) / sum(cross_tab) * 100
+cat(sprintf("\nCluster purity: %.1f%%\n", purity))
+
+# Cross-tabulation as heatmap
+cross_tab <- table(iris_clustered$Species, iris_clustered$cluster)
+cross_df <- as.data.frame(cross_tab)
+names(cross_df) <- c("Species", "Cluster", "Count")
+
+p_confusion <- ggplot(cross_df, aes(x = Cluster, y = Species, fill = Count)) +
+  geom_tile() +
+  geom_text(aes(label = Count), color = "white", size = 5) +
+  scale_fill_gradient(low = "blue", high = "red") +
+  theme_minimal() +
+  labs(title = "Cluster vs. Species", 
+       subtitle = "How k-means clusters align with true labels",
+       x = "k-means Cluster", 
+       y = "True Species")
+p_confusion
