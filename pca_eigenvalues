@@ -21,6 +21,16 @@ pca_fit_spi <- spi_indicators_cleaned |>
   scale() |>
   prcomp()
 
+qatarcars_cleaned <- qatarcars |>
+  #select(-iso3c, country, -year, -income) |>
+  select(-make, -model, -type, -enginetype) |>
+  drop_na()
+
+qatarcars_spi <- qatarcars_cleaned |>
+  select(where(is.numeric)) |>
+  scale() |>
+  prcomp()
+
 
 pca_fit_spi |>
   tidy(matrix="rotation") |>
