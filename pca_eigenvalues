@@ -1,3 +1,13 @@
+cases_month_cleaned <- cases_month |>
+  select(-country, -iso3, -year, -month) |>
+  drop_na()
+
+pca_fit_cases_month <- cases_month_cleaned |>
+  select(where(is.numeric)) |>
+  scale() |>
+  prcomp()
+
+
 pca_fit_spi |>
   tidy(matrix="rotation") |>
   pivot_wider(names_from="PC", values_from="value", names_prefix="PC") |>
