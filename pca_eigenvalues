@@ -97,3 +97,48 @@ pca_fit_tb |>
   scale_x_continuous(name="PC1") +
   scale_y_continuous(name="PC2") +
   guides(color = guide_legend(override.aes = list(size = 2))) #removing legend title
+
+pca_fit_cases_month |>
+  tidy(matrix="rotation") |>
+  pivot_wider(names_from="PC", values_from="value", names_prefix="PC") |>
+  #order of variables - BMI, PhysicalHealth, MentalHealth, SleepTime, Smoking, AlcoholDrinking, PhysicalActivity, ApproximateAge
+  ggplot(aes(PC1, PC2)) +
+  geom_segment(xend=0, yend=0, arrow=arrow_style) +
+  geom_text(aes(label=column)) +
+  #geom_text(aes(label=column, hjust=hjust, vjust=vjust)) +
+  coord_fixed(xlim=c(-1, 1.1),
+              ylim=c(-1.2, 0.7)) +
+  theme_minimal() 
+
+
+pca_fit_cases_month |>
+  tidy(matrix="eigenvalues") |>
+  ggplot(aes(PC, percent)) +
+  geom_col(fill="#51b2e5") +
+  scale_x_continuous(
+    #creates one axis tick per PC
+    breaks = 1:8
+    ) +
+  scale_y_continuous(
+    name="variance explained",
+    #format y axis ticks as percent values
+    label = scales::label_percent(accuracy=1)) +
+  theme_minimal() +
+  #modifying font color
+  theme(axis.text.x = element_text(color="black"),
+        axis.text.y = element_text(color="black"))
+
+pca_fit_cases_month |>
+  augment(cases_month_cleaned) |>
+  ggplot(aes(.fittedPC1, .fittedPC2)) +
+  #adding transparency and reducing the size of points for ease of visualization
+  geom_point(aes(color= region), size=0.6) + 
+  #scale_color_manual(values = c("Yes" = "green", "No" = "red")) +
+  theme_minimal() +
+  theme(legend.position = "top",
+        legend.title = element_blank())  +
+  scale_x_continuous(name="PC1") +
+  scale_y_continuous(name="PC2") +
+  scale_color_discrete_qualitative(palette="Dark 3") +
+  guides(color = guide_legend(override.aes = list(size = 2))) #removing legend title
+
